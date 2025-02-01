@@ -13,31 +13,68 @@ import './Game.css';
 const Game = () => {
     const { connected, sendMessage, subscribe } = useWebSocket();
 
-    // Existing state
-    const [currentQuestion, setCurrentQuestion] = useState({
-        text: "What is the main purpose of the 'final' keyword in Java?",
-        answers: [
-            "To prevent inheritance",
-            "To make a variable constant",
-            "To improve performance",
-            "To declare the end of a file"
-        ]
-    });
-    const [score, setScore] = useState(0);
-    const [correctAnswers, setCorrectAnswers] = useState(0);
-    const [totalQuestions, setTotalQuestions] = useState(10);
-    const [difficulty, setDifficulty] = useState('easy');
-    const [timeLeft, setTimeLeft] = useState(30);
+    // NEW CODE - useReducer implementation
+    const initialState = {
+        currentQuestion: {
+            text: "What is the main purpose of the 'final' keyword in Java?",
+            answers: [
+                "To prevent inheritance",
+                "To make a variable constant",
+                "To improve performance",
+                "To declare the end of a file"
+            ]
+        },
+        score: 0,
+        correctAnswers: 0,
+        totalQuestions: 10,
+        difficulty: 'easy',
+        timeLeft: 30,
+        isLoading: false,
+        connectionError: '',
+        roomCode: '',
+        players: [],
+        gameState: 'WAITING',
+        isHost: false,
+        playerName: ''
+    };
 
-    const [isLoading, setIsLoading] = useState(false);
-    const [connectionError, setConnectionError] = useState('');
+    const gameReducer = (state, action) => {
+        switch (action.type) {
+            case 'SET_QUESTION':
+                return { ...state, currentQuestion: action.payload };
+            case 'UPDATE_SCORE':
+                return { ...state, score: state.score + action.payload };
+            case 'INCREMENT_CORRECT_ANSWERS':
+                return {
+                    ...state,
+                    correctAnswers: state.correctAnswers + 1,
+                    difficulty: state.correctAnswers + 1 > state.totalQuestions * 0.8
+                        ? 'hard'
+                        : state.correctAnswers + 1 > state.totalQuestions / 2
+                            ? 'medium'
+                            : state.difficulty
+                };
+            case 'SET_LOADING':
+                return { ...state, isLoading: action.payload };
+            case 'SET_ERROR':
+                return { ...state, connectionError: action.payload };
+            case 'SET_ROOM_CODE':
+                return { ...state, roomCode: action.payload };
+            case 'UPDATE_PLAYERS':
+                return { ...state, players: action.payload };
+            case 'SET_GAME_STATE':
+                return { ...state, gameState: action.payload };
+            case 'SET_HOST':
+                return { ...state, isHost: action.payload };
+            case 'SET_PLAYER_NAME':
+                return { ...state, playerName: action.payload };
+            case 'UPDATE_TIME':
+                return { ...state, timeLeft: action.payload };
+            default:
+                return state;
+        }
+    };
 
-    // Multiplayer state
-    const [roomCode, setRoomCode] = useState('');
-    const [players, setPlayers] = useState([]);
-    const [gameState, setGameState] = useState('WAITING');
-    const [isHost, setIsHost] = useState(false);
-    const [playerName, setPlayerName] = useState('');
 
     // Subscribe to game updates
     // Keep your existing useEffect for WebSocket subscription
