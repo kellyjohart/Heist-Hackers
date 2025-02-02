@@ -4,6 +4,10 @@ import { WS_CONFIG } from '../WebSocket/webSocketConfig';
 import Question from '../Question/Question';
 import PlayerList from '../PlayerList/PlayerList';
 import LoadingSpinner from '../LoadingSpinner/LoadingSpinner';
+import { questionService } from '../services/questionService';
+import { gameService } from '../services/gameService';
+import { scoreService } from '../services/scoreService';
+
 import './Game.css';
 
 function Game() {
