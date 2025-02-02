@@ -1,6 +1,6 @@
 import React from 'react';
 import Game from './components/Game/Game';
-import { WebSocketProvider } from './websocket/WebSocketProvider';
+import { WebSocketProvider } from './components/WebSocket/WebSocketProvider';  // Update this path
 import './App.css';
 
 function App() {
@@ -11,11 +11,9 @@ function App() {
                     <h1>Heist Hackers</h1>
                 </header>
                 <main>
-                    <Game />
+                    <Game/>
                 </main>
             </div>
         </WebSocketProvider>
     );
 }
-
-export default App;

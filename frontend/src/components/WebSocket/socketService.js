@@ -1,49 +1,74 @@
+import { WS_CONFIG } from './webSocketConfig';
 
+let stompClient = null;
 
-let wsInstance = null;
-
-export const setWebSocketInstance = (instance) => {
-    wsInstance = instance;
+export const setWebSocketInstance = (client) => {
+    stompClient = client;
 };
 
 export const subscribe = (topic, callback) => {
-    if (!wsInstance) {
-        console.warn('WebSocket instance not set');
+    if (!stompClient || !stompClient.connected) {
+        console.warn('STOMP client not connected');
         return {
             unsubscribe: () => {}
         };
     }
 
-    // Add message listener
-    const messageHandler = (event) => {
+    if (!Object.values(WS_CONFIG.TOPICS).includes(topic)) {
+        console.warn(`Invalid topic: ${topic}`);
+        return {
+            unsubscribe: () => {}
+        };
+    }
+
+    return stompClient.subscribe(topic, (message) => {
         try {
-            const data = JSON.parse(event.data);
-            if (data.topic === topic) {
-                callback(data.payload);
-            }
+            const data = JSON.parse(message.body);
+            callback(data);
         } catch (error) {
             console.error('Error parsing message:', error);
         }
-    };
-
-    wsInstance.addEventListener('message', messageHandler);
-
-    // Return unsubscribe function
-    return {
-        unsubscribe: () => {
-            wsInstance.removeEventListener('message', messageHandler);
-        }
-    };
+    });
 };
 
-export const sendMessage = (message) => {
-    if (!wsInstance) {
-        console.warn('WebSocket instance not set');
+export const sendMessage = (destination, message) => {
+    if (!stompClient || !stompClient.connected) {
+        console.warn('STOMP client not connected');
         return;
     }
-    wsInstance.send(JSON.stringify(message));
+
+    if (!Object.values(WS_CONFIG.DESTINATIONS).includes(destination)) {
+        console.warn(`Invalid destination: ${destination}`);
+        return;
+    }
+
+    stompClient.publish({
+        destination,
+        body: JSON.stringify(message)
+    });
 };
 
 export const connected = () => {
-    return wsInstance?.readyState === WebSocket.OPEN;
+    return stompClient?.connected || false;
+};
+
+// Helper functions for specific game actions
+export const createGame = (payload) => {
+    sendMessage(WS_CONFIG.DESTINATIONS.CREATE, payload);
+};
+
+export const joinGame = (payload) => {
+    sendMessage(WS_CONFIG.DESTINATIONS.JOIN, payload);
+};
+
+export const startGame = (payload) => {
+    sendMessage(WS_CONFIG.DESTINATIONS.START, payload);
+};
+
+export const submitAnswer = (payload) => {
+    sendMessage(WS_CONFIG.DESTINATIONS.ANSWER, payload);
+};
+
+export const timeUp = (payload) => {
+    sendMessage(WS_CONFIG.DESTINATIONS.TIMEUP, payload);
 };
