@@ -1,62 +1,78 @@
-import React, { useEffect, useReducer, useCallback } from 'react';
-import { initialState } from './gameState';
-import { gameReducer } from './gameReducer';
+import React, { useEffect, useReducer } from 'react';
 import { useWebSocket } from '../WebSocket/useWebSocket';
-import { setWebSocketInstance, subscribe, sendMessage, connected } from '../WebSocket/socketService';
-import  LoadingSpinner  from '../LoadingSpinner/LoadingSpinner';
-import  DifficultyIndicator  from '../DifficultyIndicator/DifficultyIndicator';
-import  Question  from '../Question/Question';
+import { WS_CONFIG } from '../WebSocket/webSocketConfig';
+import LoadingSpinner from '../LoadingSpinner/LoadingSpinner';
+import PlayerList from '../PlayerList/PlayerList';
+import Question from '../Question/Question'; // Changed from QuestionDisplay to Question
+import { gameReducer, initialState } from './gameState';
 import './Game.css';
 
-export const Game = () => {
+
+function Game() {
     const [state, dispatch] = useReducer(gameReducer, initialState);
-    const ws = useWebSocket();
-
-    // Set WebSocket instance when available
-    useEffect(() => {
-        if (ws) {
-            setWebSocketInstance(ws);
-        }
-    }, [ws]);
-
-    // Handle game updates
-    const handleGameUpdate = useCallback((message) => {
-        dispatch({ type: 'UPDATE_GAME', payload: message });
-    }, []);
+    const { connected, subscribe, sendMessage } = useWebSocket();
 
     useEffect(() => {
-        if (connected() && state.roomCode) {
-            const subscription = subscribe(`game/${state.roomCode}`, handleGameUpdate);
-            return () => subscription.unsubscribe();
-        }
-    }, [state.roomCode, handleGameUpdate]);
+        if (connected) {
+            const gameSubscription = subscribe(WS_CONFIG.TOPICS.GAME, (data) => {
+                console.log('Game update received:', data);
+                // Handle different types of game updates
+                switch (data.type) {
+                    case 'GAME_CREATED':
+                        dispatch({ type: 'SET_ROOM_CODE', payload: data.roomCode });
+                        dispatch({ type: 'SET_PLAYER_LIST', payload: data.players });
+                        break;
+                    case 'PLAYER_JOINED':
+                        dispatch({ type: 'SET_PLAYER_LIST', payload: data.players });
+                        break;
+                    case 'GAME_STARTED':
+                        dispatch({ type: 'SET_GAME_STATE', payload: 'PLAYING' });
+                        dispatch({ type: 'SET_CURRENT_QUESTION', payload: data.question });
+                        break;
+                    // Add more cases as needed
+                }
+            });
 
-    useEffect(() => {
-        if (state.connectionError) {
-            alert('Connection error occurred. Please try again.');
+            return () => {
+                gameSubscription?.unsubscribe();
+            };
         }
-    }, [state.connectionError]);
-
-    const handleAnswer = (answer) => {
-        sendMessage({ type: 'ANSWER', payload: { answer, roomCode: state.roomCode } });
-    };
+    }, [connected, subscribe]);
 
     const createGame = () => {
-        sendMessage({ type: 'CREATE_GAME' });
+        dispatch({ type: 'SET_LOADING', payload: true });
+        sendMessage(WS_CONFIG.DESTINATIONS.CREATE, {
+            playerName: state.playerName
+        });
     };
 
     const joinGame = (roomCode) => {
-        if (roomCode) {
-            sendMessage({ type: 'JOIN_GAME', payload: { roomCode } });
-        }
+        dispatch({ type: 'SET_LOADING', payload: true });
+        sendMessage(WS_CONFIG.DESTINATIONS.JOIN, {
+            roomCode,
+            playerName: state.playerName
+        });
     };
 
     const startGame = () => {
-        sendMessage({ type: 'START_GAME', payload: { roomCode: state.roomCode } });
+        sendMessage(WS_CONFIG.DESTINATIONS.START, {
+            roomCode: state.roomCode
+        });
+    };
+
+    const submitAnswer = (answer) => {
+        sendMessage(WS_CONFIG.DESTINATIONS.ANSWER, {
+            roomCode: state.roomCode,
+            playerName: state.playerName,
+            answer
+        });
     };
 
     const handleTimeUp = () => {
-        sendMessage({ type: 'TIME_UP', payload: { roomCode: state.roomCode } });
+        sendMessage(WS_CONFIG.DESTINATIONS.TIMEUP, {
+            roomCode: state.roomCode,
+            playerName: state.playerName
+        });
     };
 
     return (
@@ -66,10 +82,8 @@ export const Game = () => {
             ) : (
                 <div>
                     {state.gameState === 'WAITING' ? (
-                        // Lobby view
                         <div className="lobby">
                             {!state.roomCode ? (
-                                // Initial join screen
                                 <div className="join-screen">
                                     <input
                                         type="text"
@@ -83,7 +97,7 @@ export const Game = () => {
                                     />
                                     <button
                                         onClick={createGame}
-                                        disabled={!connected() || !state.playerName || state.isLoading}
+                                        disabled={!connected || !state.playerName || state.isLoading}
                                         className={state.isLoading ? 'button-loading' : ''}
                                     >
                                         {state.isLoading ? 'Creating...' : 'Create Game'}
@@ -100,7 +114,7 @@ export const Game = () => {
                                         />
                                         <button
                                             onClick={() => joinGame(state.roomCode)}
-                                            disabled={!connected() || !state.playerName || !state.roomCode || state.isLoading}
+                                            disabled={!connected || !state.playerName || !state.roomCode || state.isLoading}
                                             className={state.isLoading ? 'button-loading' : ''}
                                         >
                                             {state.isLoading ? 'Joining...' : 'Join Game'}
@@ -108,77 +122,35 @@ export const Game = () => {
                                     </div>
                                 </div>
                             ) : (
-                                // Waiting room
                                 <div className="waiting-room">
                                     <h2>Room Code: {state.roomCode}</h2>
-                                    <div className="players-list">
-                                        {state.players.map(player => (
-                                            <div key={player.name}>{player.name}</div>
-                                        ))}
-                                    </div>
+                                    <PlayerList players={state.players} />
                                     {state.isHost && (
                                         <button
                                             onClick={startGame}
-                                            disabled={!connected() || state.players.length < 1 || state.isLoading}
-                                            className={state.isLoading ? 'button-loading' : ''}
+                                            disabled={state.players.length < 2}
                                         >
-                                            {state.isLoading ? 'Starting...' : 'Start Game'}
+                                            Start Game
                                         </button>
                                     )}
                                 </div>
                             )}
                         </div>
                     ) : (
-                        // Game view
-                        <>
-                            <DifficultyIndicator difficulty={state.difficulty} />
-
-                            <div style={{ marginTop: '10px', marginBottom: '10px' }}>
-                                <button onClick={() => {
-                                    dispatch({
-                                        type: 'SET_DIFFICULTY',
-                                        payload: 'easy'
-                                    });
-                                }}>
-                                    Set Easy
-                                </button>
-                                <button onClick={() => {
-                                    dispatch({
-                                        type: 'SET_DIFFICULTY',
-                                        payload: 'medium'
-                                    });
-                                }}>
-                                    Set Medium
-                                </button>
-                                <button onClick={() => {
-                                    dispatch({
-                                        type: 'SET_DIFFICULTY',
-                                        payload: 'hard'
-                                    });
-                                }}>
-                                    Set Hard
-                                </button>
-                            </div>
-
-                            <div className="game-stats">
-                                <p>Score: {state.score}</p>
-                                <p>Correct Answers: {state.correctAnswers} / {state.totalQuestions}</p>
-                            </div>
-                            {state.currentQuestion && (
-                                <Question
-                                    question={state.currentQuestion}
-                                    onAnswer={handleAnswer}
-                                    timeLeft={state.timeLeft}
-                                    onTimeUp={handleTimeUp}
-                                />
-                            )}
-                        </>
+                        <div className="game-play">
+                            <Question
+                                question={state.currentQuestion}
+                                onAnswer={submitAnswer}
+                                timeLeft={state.timeLeft} // Make sure this is managed in your state
+                            />
+                            <PlayerList players={state.players} />
+                        </div>
 
                     )}
                 </div>
             )}
         </div>
     );
-};
+}
 
 export default Game;
