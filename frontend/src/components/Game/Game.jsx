@@ -1,152 +1,177 @@
-import React, { useEffect, useReducer } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useWebSocket } from '../WebSocket/useWebSocket';
 import { WS_CONFIG } from '../WebSocket/webSocketConfig';
-import LoadingSpinner from '../LoadingSpinner/LoadingSpinner';
+import Question from '../Question/Question';
 import PlayerList from '../PlayerList/PlayerList';
-import Question from '../Question/Question'; // Changed from QuestionDisplay to Question
-import { gameReducer, initialState } from './gameState';
+import LoadingSpinner from '../LoadingSpinner/LoadingSpinner';
 import './Game.css';
 
-
 function Game() {
-    const [state, dispatch] = useReducer(gameReducer, initialState);
     const { connected, subscribe, sendMessage } = useWebSocket();
+    const [gameState, setGameState] = useState({
+        roomCode: null,
+        players: [],
+        currentQuestion: null,
+        isHost: false,
+        timeLeft: 30,
+        isLoading: false,
+        playerName: ''
+    });
 
     useEffect(() => {
         if (connected) {
+            // Subscribe to game updates
             const gameSubscription = subscribe(WS_CONFIG.TOPICS.GAME, (data) => {
                 console.log('Game update received:', data);
-                // Handle different types of game updates
-                switch (data.type) {
-                    case 'GAME_CREATED':
-                        dispatch({ type: 'SET_ROOM_CODE', payload: data.roomCode });
-                        dispatch({ type: 'SET_PLAYER_LIST', payload: data.players });
-                        break;
-                    case 'PLAYER_JOINED':
-                        dispatch({ type: 'SET_PLAYER_LIST', payload: data.players });
-                        break;
-                    case 'GAME_STARTED':
-                        dispatch({ type: 'SET_GAME_STATE', payload: 'PLAYING' });
-                        dispatch({ type: 'SET_CURRENT_QUESTION', payload: data.question });
-                        break;
-                    // Add more cases as needed
-                }
+                handleGameUpdate(data);
+            });
+
+            // Subscribe to player updates
+            const playerSubscription = subscribe(WS_CONFIG.TOPICS.PLAYER, (data) => {
+                console.log('Player update received:', data);
+                handlePlayerUpdate(data);
             });
 
             return () => {
                 gameSubscription?.unsubscribe();
+                playerSubscription?.unsubscribe();
             };
         }
     }, [connected, subscribe]);
 
+    const handleGameUpdate = (data) => {
+        switch (data.type) {
+            case 'GAME_CREATED':
+                setGameState(prev => ({
+                    ...prev,
+                    roomCode: data.roomCode,
+                    isHost: true,
+                    isLoading: false
+                }));
+                break;
+            case 'GAME_JOINED':
+                setGameState(prev => ({
+                    ...prev,
+                    roomCode: data.roomCode,
+                    players: data.players,
+                    isLoading: false
+                }));
+                break;
+            case 'GAME_STARTED':
+                setGameState(prev => ({
+                    ...prev,
+                    currentQuestion: data.question,
+                    timeLeft: 30
+                }));
+                break;
+            case 'QUESTION_TIMEOUT':
+                setGameState(prev => ({
+                    ...prev,
+                    timeLeft: 0
+                }));
+                break;
+            default:
+                console.log('Unknown game update type:', data.type);
+        }
+    };
+
+    const handlePlayerUpdate = (data) => {
+        setGameState(prev => ({
+            ...prev,
+            players: data.players
+        }));
+    };
+
     const createGame = () => {
-        dispatch({ type: 'SET_LOADING', payload: true });
+        setGameState(prev => ({ ...prev, isLoading: true }));
         sendMessage(WS_CONFIG.DESTINATIONS.CREATE, {
-            playerName: state.playerName
+            playerName: gameState.playerName
         });
     };
 
-    const joinGame = (roomCode) => {
-        dispatch({ type: 'SET_LOADING', payload: true });
+    const joinGame = () => {
+        setGameState(prev => ({ ...prev, isLoading: true }));
         sendMessage(WS_CONFIG.DESTINATIONS.JOIN, {
-            roomCode,
-            playerName: state.playerName
+            roomCode: gameState.roomCode,
+            playerName: gameState.playerName
         });
     };
 
     const startGame = () => {
         sendMessage(WS_CONFIG.DESTINATIONS.START, {
-            roomCode: state.roomCode
+            roomCode: gameState.roomCode
         });
     };
 
-    const submitAnswer = (answer) => {
+    const handleAnswer = (answer) => {
         sendMessage(WS_CONFIG.DESTINATIONS.ANSWER, {
-            roomCode: state.roomCode,
-            playerName: state.playerName,
+            roomCode: gameState.roomCode,
+            playerName: gameState.playerName,
             answer
         });
     };
 
-    const handleTimeUp = () => {
-        sendMessage(WS_CONFIG.DESTINATIONS.TIMEUP, {
-            roomCode: state.roomCode,
-            playerName: state.playerName
-        });
-    };
+    if (gameState.isLoading) {
+        return <LoadingSpinner />;
+    }
 
     return (
         <div className="game-container">
-            {state.isLoading ? (
-                <LoadingSpinner />
-            ) : (
-                <div>
-                    {state.gameState === 'WAITING' ? (
-                        <div className="lobby">
-                            {!state.roomCode ? (
-                                <div className="join-screen">
-                                    <input
-                                        type="text"
-                                        placeholder="Enter your name"
-                                        value={state.playerName}
-                                        onChange={(e) => dispatch({
-                                            type: 'SET_PLAYER_NAME',
-                                            payload: e.target.value
-                                        })}
-                                        disabled={state.isLoading}
-                                    />
-                                    <button
-                                        onClick={createGame}
-                                        disabled={!connected || !state.playerName || state.isLoading}
-                                        className={state.isLoading ? 'button-loading' : ''}
-                                    >
-                                        {state.isLoading ? 'Creating...' : 'Create Game'}
-                                    </button>
-                                    <div>
-                                        <input
-                                            type="text"
-                                            placeholder="Enter room code"
-                                            onChange={(e) => dispatch({
-                                                type: 'SET_ROOM_CODE',
-                                                payload: e.target.value
-                                            })}
-                                            disabled={state.isLoading}
-                                        />
-                                        <button
-                                            onClick={() => joinGame(state.roomCode)}
-                                            disabled={!connected || !state.playerName || !state.roomCode || state.isLoading}
-                                            className={state.isLoading ? 'button-loading' : ''}
-                                        >
-                                            {state.isLoading ? 'Joining...' : 'Join Game'}
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="waiting-room">
-                                    <h2>Room Code: {state.roomCode}</h2>
-                                    <PlayerList players={state.players} />
-                                    {state.isHost && (
-                                        <button
-                                            onClick={startGame}
-                                            disabled={state.players.length < 2}
-                                        >
-                                            Start Game
-                                        </button>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div className="game-play">
-                            <Question
-                                question={state.currentQuestion}
-                                onAnswer={submitAnswer}
-                                timeLeft={state.timeLeft} // Make sure this is managed in your state
-                            />
-                            <PlayerList players={state.players} />
-                        </div>
-
+            {!gameState.roomCode ? (
+                <div className="join-screen">
+                    <input
+                        type="text"
+                        placeholder="Enter your name"
+                        value={gameState.playerName}
+                        onChange={(e) => setGameState(prev => ({
+                            ...prev,
+                            playerName: e.target.value
+                        }))}
+                    />
+                    <button
+                        onClick={createGame}
+                        disabled={!connected || !gameState.playerName}
+                    >
+                        Create Game
+                    </button>
+                    <div>
+                        <input
+                            type="text"
+                            placeholder="Enter room code"
+                            onChange={(e) => setGameState(prev => ({
+                                ...prev,
+                                roomCode: e.target.value
+                            }))}
+                        />
+                        <button
+                            onClick={joinGame}
+                            disabled={!connected || !gameState.playerName || !gameState.roomCode}
+                        >
+                            Join Game
+                        </button>
+                    </div>
+                </div>
+            ) : !gameState.currentQuestion ? (
+                <div className="waiting-room">
+                    <h2>Room Code: {gameState.roomCode}</h2>
+                    <PlayerList players={gameState.players} />
+                    {gameState.isHost && (
+                        <button
+                            onClick={startGame}
+                            disabled={gameState.players.length < 2}
+                        >
+                            Start Game
+                        </button>
                     )}
+                </div>
+            ) : (
+                <div className="game-play">
+                    <Question
+                        question={gameState.currentQuestion}
+                        onAnswer={handleAnswer}
+                        timeLeft={gameState.timeLeft}
+                    />
+                    <PlayerList players={gameState.players} />
                 </div>
             )}
         </div>
