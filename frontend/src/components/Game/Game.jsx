@@ -5,6 +5,7 @@ import { UserContext } from '../../context/UserContext';
 import { gameReducer, initialGameState, gameActions } from './gameReducer';
 import PlayerList from '../PlayerList/PlayerList';
 import Timer from '../Timer/Timer';
+import { WS_CONFIG } from '../WebSocket/webSocketConfig';
 import './Game.css';
 
 const Game = () => {
@@ -21,82 +22,107 @@ const Game = () => {
         roomCode: roomId
     });
 
-    useEffect(() => {
-        if (connected) {
-            // Subscribe to room events
-            const roomSubscription = subscribe(`/topic/room/${roomId}`, (data) => {
-                handleGameMessage(data);
-            });
-
-            // Subscribe to player-specific events
-            const playerSubscription = subscribe(`/user/queue/player`, (data) => {
-                handlePlayerMessage(data);
-            });
-
-            // Join room
-            sendMessage('/app/join', {
-                roomId,
-                username,
-                isHost
-            });
-
-            return () => {
-                if (roomSubscription) roomSubscription.unsubscribe();
-                if (playerSubscription) playerSubscription.unsubscribe();
-            };
-        }
-    }, [connected, roomId, username, isHost]);
-
+    // Handle game-related WebSocket messages
     const handleGameMessage = (message) => {
         switch (message.type) {
-            case 'PLAYER_JOINED':
+            case WS_CONFIG.MESSAGE_TYPES.PLAYER_JOINED:
                 dispatch(gameActions.updatePlayers(message.players));
                 break;
-            case 'GAME_STARTED':
-                dispatch(gameActions.setGameState('PLAYING'));
+            case WS_CONFIG.MESSAGE_TYPES.GAME_STARTED:
+                dispatch(gameActions.setGameState(WS_CONFIG.GAME_STATES.PLAYING));
                 break;
-            case 'NEW_QUESTION':
+            case WS_CONFIG.MESSAGE_TYPES.NEW_QUESTION:
                 dispatch(gameActions.setQuestion(message.question));
-                dispatch(gameActions.updateTime(30)); // Reset timer for new question
+                dispatch(gameActions.updateTime(WS_CONFIG.TIMEOUTS.QUESTION / 1000)); // Convert to seconds
                 break;
-            case 'GAME_ENDED':
-                dispatch(gameActions.setGameState('FINISHED'));
+            case WS_CONFIG.MESSAGE_TYPES.ANSWER_SUBMITTED:
+                dispatch(gameActions.updatePlayerAnswer({
+                    playerId: message.playerId,
+                    answer: message.answer
+                }));
+                break;
+            case WS_CONFIG.MESSAGE_TYPES.TIME_UP:
+                dispatch(gameActions.setGameState(WS_CONFIG.GAME_STATES.ANSWER_REVIEW));
+                break;
+            case WS_CONFIG.MESSAGE_TYPES.SCORE_UPDATE:
+                dispatch(gameActions.updateScores(message.scores));
+                break;
+            case WS_CONFIG.MESSAGE_TYPES.GAME_OVER:
+                dispatch(gameActions.setGameState(WS_CONFIG.GAME_STATES.FINISHED));
+                dispatch(gameActions.setFinalScores(message.finalScores));
                 break;
             default:
                 console.log('Unknown message type:', message.type);
         }
     };
 
-    const handlePlayerMessage = (message) => {
-        switch (message.type) {
-            case 'SCORE_UPDATE':
-                dispatch(gameActions.updateScore(message.score));
-                break;
-            case 'ANSWER_RESULT':
-                dispatch(gameActions.submitAnswer(message.correct, state.timeLeft));
-                break;
-            default:
-                console.log('Unknown player message:', message.type);
-        }
-    };
+    // Subscribe to WebSocket topics when connected
+    useEffect(() => {
+        if (connected) {
+            // Subscribe to room events
+            const roomSubscription = subscribe(
+                WS_CONFIG.TOPICS.ROOM(roomId),
+                handleGameMessage
+            );
 
+            // Subscribe to player-specific events
+            const playerSubscription = subscribe(
+                WS_CONFIG.TOPICS.PLAYER,
+                (message) => {
+                    if (message.type === WS_CONFIG.MESSAGE_TYPES.SCORE_UPDATE) {
+                        dispatch(gameActions.updatePlayerScore({
+                            playerId: username,
+                            score: message.score
+                        }));
+                    }
+                }
+            );
+
+            // Join room
+            sendMessage(WS_CONFIG.DESTINATIONS.JOIN, {
+                roomId,
+                username,
+                isHost
+            });
+
+            return () => {
+                roomSubscription?.unsubscribe();
+                playerSubscription?.unsubscribe();
+                // Send leave message when component unmounts
+                sendMessage(WS_CONFIG.DESTINATIONS.LEAVE, {
+                    roomId,
+                    username
+                });
+            };
+        }
+    }, [connected, roomId, username, isHost]);
+
+    // Handle game start
     const handleStartGame = () => {
         if (connected && state.isHost) {
-            sendMessage('/app/start', {
+            sendMessage(WS_CONFIG.DESTINATIONS.START, {
                 roomId
             });
-            dispatch(gameActions.resetGame());
-            dispatch(gameActions.setGameState('PLAYING'));
         }
     };
 
+    // Handle answer submission
     const handleAnswer = (answer) => {
-        if (connected && state.gameState === 'PLAYING') {
-            sendMessage('/app/answer', {
+        if (connected && state.gameState === WS_CONFIG.GAME_STATES.PLAYING) {
+            sendMessage(WS_CONFIG.DESTINATIONS.ANSWER, {
                 roomId,
                 username,
                 answer,
                 timeLeft: state.timeLeft
+            });
+        }
+    };
+
+    // Handle timer completion
+    const handleTimeUp = () => {
+        if (connected && state.isHost) {
+            sendMessage(WS_CONFIG.DESTINATIONS.TIMEUP, {
+                roomId
             });
         }
     };
@@ -122,7 +148,7 @@ const Game = () => {
                     </div>
                 )}
 
-                {connected && state.gameState === 'WAITING' && (
+                {connected && state.gameState === WS_CONFIG.GAME_STATES.WAITING && (
                     <div className="waiting-room">
                         {state.isHost ? (
                             <button
@@ -141,11 +167,12 @@ const Game = () => {
                     </div>
                 )}
 
-                {connected && state.gameState === 'PLAYING' && state.currentQuestion && (
+                {connected && state.gameState === WS_CONFIG.GAME_STATES.PLAYING && state.currentQuestion && (
                     <div className="question-container">
                         <Timer
-                            duration={30}
+                            duration={WS_CONFIG.TIMEOUTS.QUESTION / 1000}
                             timeRemaining={state.timeLeft}
+                            onTimeUp={handleTimeUp}
                             setTimeRemaining={(time) => dispatch(gameActions.updateTime(time))}
                         />
                         <h3 className="question-text">{state.currentQuestion.text}</h3>
@@ -164,11 +191,10 @@ const Game = () => {
                     </div>
                 )}
 
-                {state.gameState === 'FINISHED' && (
+                {state.gameState === WS_CONFIG.GAME_STATES.FINISHED && (
                     <div className="game-over">
                         <h2>Game Over!</h2>
                         <div className="final-scores">
-                            <h3>Final Scores:</h3>
                             {state.players
                                 .sort((a, b) => b.score - a.score)
                                 .map((player, index) => (
