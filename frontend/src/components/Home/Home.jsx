@@ -7,19 +7,42 @@ const Home = () => {
     const navigate = useNavigate();
     const { setUsername } = useContext(UserContext);
     const [inputUsername, setInputUsername] = useState('');
+    const [roomCode, setRoomCode] = useState('');
+    const [showJoinRoom, setShowJoinRoom] = useState(false);
 
-    const handleSubmit = (e) => {
+    const handleCreateRoom = (e) => {
         e.preventDefault();
         if (inputUsername.trim()) {
             setUsername(inputUsername);
             const roomId = 'room-' + Math.random().toString(36).substr(2, 9);
-            navigate(`/game/${roomId}`);
+            navigate(`/game/${roomId}`, {
+                state: {
+                    username: inputUsername,
+                    isHost: true
+                }
+            });
+        }
+    };
+
+    const handleJoinRoom = (e) => {
+        e.preventDefault();
+        if (inputUsername.trim() && roomCode.trim()) {
+            setUsername(inputUsername);
+            navigate(`/game/${roomCode}`, {
+                state: {
+                    username: inputUsername,
+                    isHost: false
+                }
+            });
         }
     };
 
     return (
         <div className="join-screen">
-            <form onSubmit={handleSubmit}>
+            <h1>Heist Hackers</h1>
+
+            {/* Username Input */}
+            <div className="input-group">
                 <input
                     type="text"
                     placeholder="Enter your username"
@@ -27,8 +50,41 @@ const Home = () => {
                     onChange={(e) => setInputUsername(e.target.value)}
                     required
                 />
-                <button type="submit">Join Game</button>
-            </form>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="button-group">
+                <button
+                    className={!showJoinRoom ? 'active' : ''}
+                    onClick={() => setShowJoinRoom(false)}
+                >
+                    Create Room
+                </button>
+                <button
+                    className={showJoinRoom ? 'active' : ''}
+                    onClick={() => setShowJoinRoom(true)}
+                >
+                    Join Room
+                </button>
+            </div>
+
+            {/* Conditional Form */}
+            {showJoinRoom ? (
+                <form onSubmit={handleJoinRoom} className="room-form">
+                    <input
+                        type="text"
+                        placeholder="Enter Room Code"
+                        value={roomCode}
+                        onChange={(e) => setRoomCode(e.target.value)}
+                        required
+                    />
+                    <button type="submit">Join Room</button>
+                </form>
+            ) : (
+                <form onSubmit={handleCreateRoom} className="room-form">
+                    <button type="submit">Create New Room</button>
+                </form>
+            )}
         </div>
     );
 };
