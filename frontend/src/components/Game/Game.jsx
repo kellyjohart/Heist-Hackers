@@ -4,10 +4,9 @@ import { WS_CONFIG } from '../WebSocket/webSocketConfig';
 import Question from '../Question/Question';
 import PlayerList from '../PlayerList/PlayerList';
 import LoadingSpinner from '../LoadingSpinner/LoadingSpinner';
-import { questionService } from '../services/questionService';
-import { gameService } from '../services/gameService';
-import { scoreService } from '../services/scoreService';
-
+import { questionService } from '../../services/questionService';
+import { gameService } from '../../services/gameService';
+import { scoreService } from '../../services/scoreService';
 import './Game.css';
 
 function Game() {
@@ -24,159 +23,144 @@ function Game() {
 
     useEffect(() => {
         if (connected) {
-            // Subscribe to game updates
-            const gameSubscription = subscribe(WS_CONFIG.TOPICS.GAME, (data) => {
-                console.log('Game update received:', data);
-                handleGameUpdate(data);
-            });
+            const handleGameState = (message) => {
+                console.log('Received game state:', message);
+                setGameState(prevState => ({
+                    ...prevState,
+                    ...message
+                }));
+            };
 
-            // Subscribe to player updates
-            const playerSubscription = subscribe(WS_CONFIG.TOPICS.PLAYER, (data) => {
-                console.log('Player update received:', data);
-                handlePlayerUpdate(data);
-            });
+            const handlePlayerJoin = (message) => {
+                console.log('Player joined:', message);
+                setGameState(prevState => ({
+                    ...prevState,
+                    players: [...prevState.players, message]
+                }));
+            };
+
+            const handlePlayerLeave = (message) => {
+                console.log('Player left:', message);
+                setGameState(prevState => ({
+                    ...prevState,
+                    players: prevState.players.filter(player => player !== message)
+                }));
+            };
+
+            const handleQuestionUpdate = async (message) => {
+                console.log('Question update:', message);
+                try {
+                    const question = await questionService.getNextQuestion(message.difficulty);
+                    setGameState(prevState => ({
+                        ...prevState,
+                        currentQuestion: question,
+                        timeLeft: 30
+                    }));
+                } catch (error) {
+                    console.error('Error fetching question:', error);
+                }
+            };
+
+            const handleAnswerResult = async (message) => {
+                console.log('Answer result:', message);
+                if (message.correct) {
+                    await scoreService.updateScore(gameState.playerName, message.points);
+                }
+            };
+
+            const subscriptions = [
+                subscribe(WS_CONFIG.TOPICS.gameState, handleGameState),
+                subscribe(WS_CONFIG.TOPICS.playerJoin, handlePlayerJoin),
+                subscribe(WS_CONFIG.TOPICS.playerLeave, handlePlayerLeave),
+                subscribe(WS_CONFIG.TOPICS.questionUpdate, handleQuestionUpdate),
+                subscribe(WS_CONFIG.TOPICS.answerResult, handleAnswerResult)
+            ];
 
             return () => {
-                gameSubscription?.unsubscribe();
-                playerSubscription?.unsubscribe();
+                subscriptions.forEach(subscription => subscription.unsubscribe());
             };
         }
-    }, [connected, subscribe]);
+    }, [connected]);
 
-    const handleGameUpdate = (data) => {
-        switch (data.type) {
-            case 'GAME_CREATED':
-                setGameState(prev => ({
-                    ...prev,
-                    roomCode: data.roomCode,
-                    isHost: true,
-                    isLoading: false
-                }));
-                break;
-            case 'GAME_JOINED':
-                setGameState(prev => ({
-                    ...prev,
-                    roomCode: data.roomCode,
-                    players: data.players,
-                    isLoading: false
-                }));
-                break;
-            case 'GAME_STARTED':
-                setGameState(prev => ({
-                    ...prev,
-                    currentQuestion: data.question,
-                    timeLeft: 30
-                }));
-                break;
-            case 'QUESTION_TIMEOUT':
-                setGameState(prev => ({
-                    ...prev,
-                    timeLeft: 0
-                }));
-                break;
-            default:
-                console.log('Unknown game update type:', data.type);
+    const initializeGame = async (roomCode) => {
+        try {
+            const gameData = await gameService.initializeGame(roomCode);
+            sendMessage(WS_CONFIG.destinations.initGame, {
+                roomCode: roomCode,
+                isHost: true
+            });
+        } catch (error) {
+            console.error('Error initializing game:', error);
         }
     };
 
-    const handlePlayerUpdate = (data) => {
-        setGameState(prev => ({
-            ...prev,
-            players: data.players
-        }));
-    };
-
-    const createGame = () => {
-        setGameState(prev => ({ ...prev, isLoading: true }));
-        sendMessage(WS_CONFIG.DESTINATIONS.CREATE, {
-            playerName: gameState.playerName
+    const joinGame = (roomCode, playerName) => {
+        sendMessage(WS_CONFIG.destinations.joinGame, {
+            roomCode: roomCode,
+            playerName: playerName
         });
     };
 
-    const joinGame = () => {
-        setGameState(prev => ({ ...prev, isLoading: true }));
-        sendMessage(WS_CONFIG.DESTINATIONS.JOIN, {
-            roomCode: gameState.roomCode,
-            playerName: gameState.playerName
-        });
+    const handleAnswer = async (answer) => {
+        try {
+            if (gameState.currentQuestion) {
+                const isCorrect = await questionService.checkAnswer(
+                    gameState.currentQuestion.id,
+                    answer
+                );
+
+                sendMessage(WS_CONFIG.destinations.submitAnswer, {
+                    questionId: gameState.currentQuestion.id,
+                    answer: answer,
+                    playerName: gameState.playerName
+                });
+
+                if (gameState.isHost) {
+                    const nextQuestion = await questionService.getNextQuestion(
+                        gameState.currentDifficulty || 1
+                    );
+                    sendMessage(WS_CONFIG.destinations.updateQuestion, nextQuestion);
+                }
+            }
+        } catch (error) {
+            console.error('Error handling answer:', error);
+        }
     };
 
-    const startGame = () => {
-        sendMessage(WS_CONFIG.DESTINATIONS.START, {
-            roomCode: gameState.roomCode
-        });
+    const startGame = async () => {
+        if (gameState.isHost) {
+            try {
+                const initialQuestion = await questionService.getNextQuestion(1);
+                sendMessage(WS_CONFIG.destinations.startGame, {
+                    roomCode: gameState.roomCode,
+                    question: initialQuestion
+                });
+            } catch (error) {
+                console.error('Error starting game:', error);
+            }
+        }
     };
 
-    const handleAnswer = (answer) => {
-        sendMessage(WS_CONFIG.DESTINATIONS.ANSWER, {
-            roomCode: gameState.roomCode,
-            playerName: gameState.playerName,
-            answer
-        });
-    };
-
-    if (gameState.isLoading) {
+    if (!connected) {
         return <LoadingSpinner />;
     }
 
     return (
         <div className="game-container">
-            {!gameState.roomCode ? (
-                <div className="join-screen">
-                    <input
-                        type="text"
-                        placeholder="Enter your name"
-                        value={gameState.playerName}
-                        onChange={(e) => setGameState(prev => ({
-                            ...prev,
-                            playerName: e.target.value
-                        }))}
-                    />
-                    <button
-                        onClick={createGame}
-                        disabled={!connected || !gameState.playerName}
-                    >
-                        Create Game
-                    </button>
-                    <div>
-                        <input
-                            type="text"
-                            placeholder="Enter room code"
-                            onChange={(e) => setGameState(prev => ({
-                                ...prev,
-                                roomCode: e.target.value
-                            }))}
-                        />
-                        <button
-                            onClick={joinGame}
-                            disabled={!connected || !gameState.playerName || !gameState.roomCode}
-                        >
-                            Join Game
-                        </button>
-                    </div>
-                </div>
-            ) : !gameState.currentQuestion ? (
-                <div className="waiting-room">
-                    <h2>Room Code: {gameState.roomCode}</h2>
-                    <PlayerList players={gameState.players} />
-                    {gameState.isHost && (
-                        <button
-                            onClick={startGame}
-                            disabled={gameState.players.length < 2}
-                        >
-                            Start Game
-                        </button>
-                    )}
-                </div>
+            <PlayerList players={gameState.players} />
+            {gameState.isLoading ? (
+                <LoadingSpinner />
+            ) : gameState.currentQuestion ? (
+                <Question
+                    question={gameState.currentQuestion}
+                    onAnswer={handleAnswer}
+                    timeLeft={gameState.timeLeft}
+                />
             ) : (
-                <div className="game-play">
-                    <Question
-                        question={gameState.currentQuestion}
-                        onAnswer={handleAnswer}
-                        timeLeft={gameState.timeLeft}
-                    />
-                    <PlayerList players={gameState.players} />
-                </div>
+                <div>Waiting for next question...</div>
+            )}
+            {gameState.isHost && !gameState.currentQuestion && (
+                <button onClick={startGame}>Start Game</button>
             )}
         </div>
     );
