@@ -1,139 +1,66 @@
-import React, {useReducer, useEffect, useCallback} from 'react';
+import React, { useEffect, useReducer, useCallback } from 'react';
+import { initialState } from './gameState';
+import { gameReducer } from './gameReducer';
 import { useWebSocket } from '../WebSocket/useWebSocket';
+import { setWebSocketInstance, subscribe, sendMessage, connected } from '../WebSocket/socketService';
+import  LoadingSpinner  from '../LoadingSpinner/LoadingSpinner';
 import  DifficultyIndicator  from '../DifficultyIndicator/DifficultyIndicator';
 import  Question  from '../Question/Question';
-import { gameReducer } from './gameReducer';
-import {initialState as state, initialState} from './gameState';
-import { WS_CONFIG } from '../WebSocket/webSocketConfig';
 import './Game.css';
-import LoadingSpinner from "../LoadingSpinner/LoadingSpinner";
 
 export const Game = () => {
-    const { connected, sendMessage, subscribe } = useWebSocket();
     const [state, dispatch] = useReducer(gameReducer, initialState);
+    const ws = useWebSocket();
 
-    // Error handling useEffect
+    // Set WebSocket instance when available
+    useEffect(() => {
+        if (ws) {
+            setWebSocketInstance(ws);
+        }
+    }, [ws]);
+
+    // Handle game updates
+    const handleGameUpdate = useCallback((message) => {
+        dispatch({ type: 'UPDATE_GAME', payload: message });
+    }, []);
+
+    useEffect(() => {
+        if (connected() && state.roomCode) {
+            const subscription = subscribe(`game/${state.roomCode}`, handleGameUpdate);
+            return () => subscription.unsubscribe();
+        }
+    }, [state.roomCode, handleGameUpdate]);
+
     useEffect(() => {
         if (state.connectionError) {
-            const timer = setTimeout(() => {
-                dispatch({ type: 'SET_ERROR', payload: '' });
-            }, 5000);
-            return () => clearTimeout(timer);
+            alert('Connection error occurred. Please try again.');
         }
-    }, [state.connectionError, dispatch]); // Add dispatch to dependency array
+    }, [state.connectionError]);
 
-// Game updates useEffect
-    useEffect(() => {
-        if (connected && state.roomCode) {
-            const subscription = subscribe(
-                `${WS_CONFIG.TOPICS.GAME}/${state.roomCode}`,
-                handleGameUpdate
-            );
-            return () => {
-                if (subscription) {
-                    subscription.unsubscribe();
-                }
-            };
-        }
-    }, [connected, state.roomCode, subscribe, handleGameUpdate]); // Add all dependencies
-
-
-    // Handle game updates from server
-    const handleGameUpdate = useCallback((update) => {
-        if (update.question) {
-            dispatch({ type: 'SET_QUESTION', payload: update.question });
-        }
-        if (update.players) {
-            dispatch({ type: 'UPDATE_PLAYERS', payload: update.players });
-        }
-        if (update.gameState) {
-            dispatch({ type: 'SET_GAME_STATE', payload: update.gameState });
-        }
-    }, [dispatch]);
-
-};
-
-    // Handle answer submission
     const handleAnswer = (answer) => {
-        sendMessage(WS_CONFIG.DESTINATIONS.ANSWER, {
-            roomCode: state.roomCode,
-            playerName: state.playerName,
-            answer
-        });
-
-        dispatch({ type: 'SUBMIT_ANSWER', payload: { correct: true } });
+        sendMessage({ type: 'ANSWER', payload: { answer, roomCode: state.roomCode } });
     };
 
-    // Game management methods
-    const createGame = async () => {
-        dispatch({ type: 'SET_LOADING', payload: true });
-        try {
-            const newRoomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-            dispatch({ type: 'SET_ROOM_CODE', payload: newRoomCode });
-            dispatch({ type: 'SET_HOST', payload: true });
+    const createGame = () => {
+        sendMessage({ type: 'CREATE_GAME' });
+    };
 
-            await sendMessage(WS_CONFIG.DESTINATIONS.CREATE, {
-                roomCode: newRoomCode,
-                playerName: state.playerName
-            });
-        } catch (error) {
-            dispatch({ type: 'SET_ERROR', payload: 'Failed to create game. Please try again.' });
-        } finally {
-            dispatch({ type: 'SET_LOADING', payload: false });
+    const joinGame = (roomCode) => {
+        if (roomCode) {
+            sendMessage({ type: 'JOIN_GAME', payload: { roomCode } });
         }
     };
 
-    const joinGame = async (code) => {
-        dispatch({ type: 'SET_LOADING', payload: true });
-        try {
-            dispatch({ type: 'SET_ROOM_CODE', payload: code });
-            await sendMessage(WS_CONFIG.DESTINATIONS.JOIN, {
-                roomCode: code,
-                playerName: state.playerName
-            });
-        } catch (error) {
-            dispatch({ type: 'SET_ERROR', payload: 'Failed to join game. Please check the room code and try again.' });
-        } finally {
-            dispatch({ type: 'SET_LOADING', payload: false });
-        }
-    };
-
-    const startGame = async () => {
-        if (state.isHost) {
-            dispatch({ type: 'SET_LOADING', payload: true });
-            try {
-                await sendMessage(WS_CONFIG.DESTINATIONS.START, {
-                    roomCode: state.roomCode
-                });
-            } catch (error) {
-                dispatch({ type: 'SET_ERROR', payload: 'Failed to start game. Please try again.' });
-            } finally {
-                dispatch({ type: 'SET_LOADING', payload: false });
-            }
-        }
+    const startGame = () => {
+        sendMessage({ type: 'START_GAME', payload: { roomCode: state.roomCode } });
     };
 
     const handleTimeUp = () => {
-        sendMessage(WS_CONFIG.DESTINATIONS.TIMEUP, {
-            roomCode: state.roomCode,
-            playerName: state.playerName
-        });
+        sendMessage({ type: 'TIME_UP', payload: { roomCode: state.roomCode } });
     };
 
     return (
         <div className="game-container">
-            {/* Connection Status */}
-            <div className="connection-status">
-                Status: {connected ? 'Connected' : 'Disconnected'}
-            </div>
-
-            {/* Error Messages */}
-            {state.connectionError && (
-                <div className="error-message">
-                    {state.connectionError}
-                </div>
-            )}
-
             {state.isLoading ? (
                 <LoadingSpinner />
             ) : (
@@ -156,7 +83,7 @@ export const Game = () => {
                                     />
                                     <button
                                         onClick={createGame}
-                                        disabled={!connected || !state.playerName || state.isLoading}
+                                        disabled={!connected() || !state.playerName || state.isLoading}
                                         className={state.isLoading ? 'button-loading' : ''}
                                     >
                                         {state.isLoading ? 'Creating...' : 'Create Game'}
@@ -173,7 +100,7 @@ export const Game = () => {
                                         />
                                         <button
                                             onClick={() => joinGame(state.roomCode)}
-                                            disabled={!connected || !state.playerName || !state.roomCode || state.isLoading}
+                                            disabled={!connected() || !state.playerName || !state.roomCode || state.isLoading}
                                             className={state.isLoading ? 'button-loading' : ''}
                                         >
                                             {state.isLoading ? 'Joining...' : 'Join Game'}
@@ -192,7 +119,7 @@ export const Game = () => {
                                     {state.isHost && (
                                         <button
                                             onClick={startGame}
-                                            disabled={!connected || state.players.length < 1 || state.isLoading}
+                                            disabled={!connected() || state.players.length < 1 || state.isLoading}
                                             className={state.isLoading ? 'button-loading' : ''}
                                         >
                                             {state.isLoading ? 'Starting...' : 'Start Game'}
@@ -205,17 +132,34 @@ export const Game = () => {
                         // Game view
                         <>
                             <DifficultyIndicator difficulty={state.difficulty} />
+
                             <div style={{ marginTop: '10px', marginBottom: '10px' }}>
-                                <button onClick={() => dispatch({ type: 'SET_DIFFICULTY', payload: 'easy' })}>
+                                <button onClick={() => {
+                                    dispatch({
+                                        type: 'SET_DIFFICULTY',
+                                        payload: 'easy'
+                                    });
+                                }}>
                                     Set Easy
                                 </button>
-                                <button onClick={() => dispatch({ type: 'SET_DIFFICULTY', payload: 'medium' })}>
+                                <button onClick={() => {
+                                    dispatch({
+                                        type: 'SET_DIFFICULTY',
+                                        payload: 'medium'
+                                    });
+                                }}>
                                     Set Medium
                                 </button>
-                                <button onClick={() => dispatch({ type: 'SET_DIFFICULTY', payload: 'hard' })}>
+                                <button onClick={() => {
+                                    dispatch({
+                                        type: 'SET_DIFFICULTY',
+                                        payload: 'hard'
+                                    });
+                                }}>
                                     Set Hard
                                 </button>
                             </div>
+
                             <div className="game-stats">
                                 <p>Score: {state.score}</p>
                                 <p>Correct Answers: {state.correctAnswers} / {state.totalQuestions}</p>
@@ -229,11 +173,12 @@ export const Game = () => {
                                 />
                             )}
                         </>
+
                     )}
                 </div>
             )}
         </div>
     );
-}
+};
 
 export default Game;
